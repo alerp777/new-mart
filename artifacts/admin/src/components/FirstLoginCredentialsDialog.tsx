@@ -6,7 +6,7 @@
  * `usingDefaultCredentials` — that would hide partial-failure errors
  * for a subsequent username PATCH.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { AlertCircle, CheckCircle2, Eye, EyeOff, KeyRound, Loader2 } from "lucide-react";
 
@@ -102,10 +102,12 @@ export function FirstLoginCredentialsDialog() {
 
   const [open, setOpen] = useState(wantsToShow);
 
+  /* Open when conditions are met */
   useEffect(() => {
     if (wantsToShow) setOpen(true);
   }, [wantsToShow]);
 
+  /* Close on logout */
   useEffect(() => {
     if (!state.accessToken) setOpen(false);
   }, [state.accessToken]);
@@ -118,6 +120,7 @@ export function FirstLoginCredentialsDialog() {
   const [formError, setFormError] = useState<string | null>(null);
   const [passwordSavedThisSession, setPasswordSavedThisSession] = useState(false);
 
+  /* Reset form fields when dialog opens */
   useEffect(() => {
     if (open) {
       setUsername(state.user?.username ?? "");
@@ -125,15 +128,23 @@ export function FirstLoginCredentialsDialog() {
       setConfirmPassword("");
       setFormError(null);
       setPasswordSavedThisSession(false);
+      setShowPasswords(false);
     }
   }, [open, state.user?.username]);
 
-  const handleSkip = () => {
+  /* FIX 1: Clear formError whenever user edits any field */
+  useEffect(() => {
+    if (formError) setFormError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [username, newPassword, confirmPassword]);
+
+  /* FIX 2: Stable skip handler */
+  const handleSkip = useCallback(() => {
     dismissDefaultCredentialsPrompt();
     setOpen(false);
-  };
+  }, [dismissDefaultCredentialsPrompt]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
 
@@ -171,10 +182,22 @@ export function FirstLoginCredentialsDialog() {
     }
 
     setSubmitting(true);
+
+    /*
+     * FIX 3: Track whether password was saved in THIS execution with a
+     * local variable. React state updates (setPasswordSavedThisSession)
+     * are async — reading `passwordSavedThisSession` later in the same
+     * call would still return the stale `false` value, producing the
+     * wrong error message when username change fails after a successful
+     * password change.
+     */
+    let pwSavedNow = passwordSavedThisSession;
+
     try {
       if (wantsPasswordChange) {
         try {
           await changePassword(DOCUMENTED_DEFAULT_PASSWORD, newPassword);
+          pwSavedNow = true;
           setPasswordSavedThisSession(true);
           setNewPassword("");
           setConfirmPassword("");
@@ -192,8 +215,9 @@ export function FirstLoginCredentialsDialog() {
         } catch (err) {
           const baseMsg =
             err instanceof Error ? err.message : "Failed to update your username.";
+          /* FIX 3 continued: use local `pwSavedNow` not stale state */
           setFormError(
-            passwordSavedThisSession
+            pwSavedNow
               ? `Password was updated, but username change failed: ${baseMsg}`
               : baseMsg,
           );
@@ -215,7 +239,17 @@ export function FirstLoginCredentialsDialog() {
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [
+    username,
+    newPassword,
+    confirmPassword,
+    passwordSavedThisSession,
+    state.user?.username,
+    changePassword,
+    updateOwnProfile,
+    dismissDefaultCredentialsPrompt,
+    toast,
+  ]);
 
   const strengthLevel = computeStrength(newPassword);
 
@@ -274,7 +308,10 @@ export function FirstLoginCredentialsDialog() {
 
           {/* Password section */}
           {passwordSavedThisSession ? (
+            /* FIX 4: aria-live so screen readers announce the success */
             <div
+              role="status"
+              aria-live="polite"
               className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 flex items-start gap-3"
               data-testid="text-password-saved"
             >
@@ -329,8 +366,9 @@ export function FirstLoginCredentialsDialog() {
 
                 {/* Password strength indicator */}
                 {newPassword.length > 0 && (
-                  <div className="space-y-1.5">
-                    <div className="flex gap-1">
+                  /* FIX 4: aria-live so screen readers announce strength changes */
+                  <div className="space-y-1.5" role="status" aria-live="polite">
+                    <div className="flex gap-1" aria-hidden="true">
                       {([1, 2, 3, 4] as const).map((bar) => (
                         <div
                           key={bar}
@@ -369,13 +407,15 @@ export function FirstLoginCredentialsDialog() {
             </div>
           )}
 
-          {/* Error banner */}
+          {/* FIX 4: role="alert" so screen readers announce errors immediately */}
           {formError && (
             <div
+              role="alert"
+              aria-live="assertive"
               className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 flex items-start gap-2.5"
               data-testid="text-credentials-error"
             >
-              <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+              <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" aria-hidden="true" />
               <p className="text-sm text-destructive leading-snug">{formError}</p>
             </div>
           )}
@@ -407,7 +447,7 @@ export function FirstLoginCredentialsDialog() {
             <Button type="submit" disabled={submitting} data-testid="button-save-credentials">
               {submitting ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                   Saving…
                 </>
               ) : (

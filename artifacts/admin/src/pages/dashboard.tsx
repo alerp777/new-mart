@@ -1,45 +1,106 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { PageHeader, StatCard } from "@/components/shared";
-import { Users, ShoppingBag, Car, Pill, Box, Package, TrendingUp, ArrowRight, Wallet, Download, Trophy, Star, AlertTriangle, DollarSign, LayoutDashboard } from "lucide-react";
+import {
+  Users, ShoppingBag, Car, Pill, Box, Package,
+  TrendingUp, ArrowRight, Wallet, Download, Trophy,
+  Star, AlertTriangle, DollarSign, LayoutDashboard,
+} from "lucide-react";
 import { Link } from "wouter";
 import { useStats, useRevenueTrend, useLeaderboard } from "@/hooks/use-admin";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
+import {
+  AreaChart, Area, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, LineChart, Line,
+} from "recharts";
 import { fetcher } from "@/lib/api";
 import { useLanguage } from "@/lib/useLanguage";
 import { tDual, type TranslationKey } from "@workspace/i18n";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { useToast } from "@/hooks/use-toast";
 
-function exportDashboard(
-  trend: { date: string; revenue: number }[],
-  onError: (msg: string) => void,
-) {
-  fetcher("/dashboard-export").then((data: any) => {
-    const enriched = { ...data, trend: data.trend ?? trend };
-    const blob = new Blob([JSON.stringify(enriched, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `dashboard-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }).catch((err: any) => onError(err?.message || "Export failed"));
+/* ── Typed interfaces (replaces `any` on list items) ─────────────────── */
+interface VendorEntry {
+  id: string;
+  name?: string;
+  phone?: string;
+  totalOrders: number;
+  totalRevenue: number;
 }
 
-/* Shimmer skeleton block */
-function SkeletonBlock({ className }: { className?: string }) {
+interface RiderEntry {
+  id: string;
+  name?: string;
+  phone?: string;
+  completedTrips: number;
+  totalEarned: number;
+}
+
+interface OrderEntry {
+  id: string;
+  type: string;
+  status: string;
+  total: number;
+  createdAt: string;
+}
+
+interface RideEntry {
+  id: string;
+  type: string;
+  status: string;
+  fare: number;
+  createdAt: string;
+}
+
+interface TrendPoint {
+  date: string;
+  revenue: number;
+  orderCount?: number;
+  rideCount?: number;
+  sosCount?: number;
+}
+
+/* ── FIX 9: StatusPill defined BEFORE Dashboard so it's never used before
+   its declaration. Works as a normal named function for hoisting clarity. ── */
+function StatusPill({ status }: { status: string }) {
+  const s = status?.toLowerCase() ?? "";
+  let cls = "bg-gray-100 text-gray-600";
+  if (s === "completed" || s === "delivered")          cls = "bg-emerald-100 text-emerald-700";
+  else if (s === "cancelled" || s === "rejected")      cls = "bg-red-100 text-red-600";
+  else if (s === "pending")                            cls = "bg-amber-100 text-amber-700";
+  else if (s === "in_transit" || s === "accepted" || s === "active")
+                                                        cls = "bg-indigo-100 text-indigo-700";
+  else if (s === "searching" || s === "bargaining")    cls = "bg-blue-100 text-blue-700";
   return (
-    <div className={`relative overflow-hidden bg-gray-100 rounded-2xl ${className}`}>
-      <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.5s_infinite] bg-gradient-to-r from-transparent via-white/60 to-transparent" />
-    </div>
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${cls}`}>
+      {status.replace(/_/g, " ")}
+    </span>
   );
 }
 
-/* Mini sparkline component */
+/* ── FIX 7: SkeletonBlock uses `bg-muted` (dark-mode safe) instead of
+   hardcoded `bg-gray-100`. shimmer keyframe is defined inline so the
+   animation works without a Tailwind config entry (FIX 3). ─────────── */
+function SkeletonBlock({ className }: { className?: string }) {
+  return (
+    <>
+      <style>{`
+        @keyframes shimmer {
+          0%   { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+      `}</style>
+      <div className={`relative overflow-hidden bg-muted rounded-2xl ${className}`}>
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/60 to-transparent"
+          style={{ animation: "shimmer 1.5s infinite" }} />
+      </div>
+    </>
+  );
+}
+
+/* Mini sparkline */
 function Sparkline({ data, color = "#6366F1" }: { data: number[]; color?: string }) {
   const chartData = data.map((v, i) => ({ i, v }));
   return (
@@ -53,8 +114,12 @@ function Sparkline({ data, color = "#6366F1" }: { data: number[]; color?: string
   );
 }
 
-/* Clickable hero card wrapper — adds hover lift + cursor */
-function HeroCardLink({ href, children, className = "" }: { href: string; children: React.ReactNode; className?: string }) {
+/* Clickable hero card wrapper */
+function HeroCardLink({ href, children, className = "" }: {
+  href: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
     <Link href={href}>
       <div className={`cursor-pointer transition-transform hover:-translate-y-0.5 ${className}`}>
@@ -75,10 +140,46 @@ function updatedAgo(ts: number): string {
   return `${Math.floor(m / 60)}h ago`;
 }
 
+/* ── FIX 1 + 2: exportDashboard ─────────────────────────────────────────
+   FIX 1 — Anchor is now appended to the DOM before `.click()` and
+            removed right after, so Firefox triggers the download.
+   FIX 2 — `URL.revokeObjectURL` is called inside `setTimeout(..., 1000)`
+            so the browser has time to start the download before the
+            object URL is invalidated.
+   ─────────────────────────────────────────────────────────────────────── */
+function exportDashboard(
+  trend: TrendPoint[],
+  onError: (msg: string) => void,
+) {
+  fetcher("/dashboard-export")
+    .then((data: unknown) => {
+      const safeData = (data ?? {}) as Record<string, unknown>;
+      const enriched = { ...safeData, trend: safeData.trend ?? trend };
+      const blob = new Blob([JSON.stringify(enriched, null, 2)], { type: "application/json" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `dashboard-${new Date().toISOString().slice(0, 10)}.json`;
+      /* FIX 1: append → click → remove */
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      /* FIX 2: revoke after a short delay so the download can start */
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    })
+    .catch((err: unknown) => {
+      onError(err instanceof Error ? err.message : "Export failed");
+    });
+}
+
+/* ── Main component ───────────────────────────────────────────────────── */
 export default function Dashboard() {
   const { toast } = useToast();
   const { language } = useLanguage();
-  const T = (key: TranslationKey) => tDual(key, language);
+
+  /* FIX 6: T() is now stable across renders */
+  const T = useCallback((key: TranslationKey) => tDual(key, language), [language]);
+
   const qc = useQueryClient();
   const { data, isLoading, dataUpdatedAt } = useStats();
   const { data: trendData } = useRevenueTrend();
@@ -92,11 +193,10 @@ export default function Dashboard() {
     ]);
   }, [qc]);
 
-  const trend: { date: string; revenue: number; orderCount?: number; rideCount?: number; sosCount?: number }[] =
-    Array.isArray(trendData?.trend) ? trendData.trend : [];
+  const trend: TrendPoint[] = Array.isArray(trendData?.trend) ? trendData.trend : [];
 
   const revenueSparkData = trend.length >= 2
-    ? trend.slice(-7).map(t => t.revenue || 0)
+    ? trend.slice(-7).map(t => t.revenue ?? 0)
     : Array(7).fill(0);
   const ridesSparkData = trend.length >= 2
     ? trend.slice(-7).map(t => t.rideCount ?? 0)
@@ -119,14 +219,10 @@ export default function Dashboard() {
           <SkeletonBlock className="h-9 w-24" />
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map(i => (
-            <SkeletonBlock key={i} className="h-28" />
-          ))}
+          {[1, 2, 3, 4].map(i => <SkeletonBlock key={i} className="h-28" />)}
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          {[1, 2, 3, 4].map(i => (
-            <SkeletonBlock key={i} className="h-24" />
-          ))}
+          {[1, 2, 3, 4].map(i => <SkeletonBlock key={i} className="h-24" />)}
         </div>
         <SkeletonBlock className="h-56" />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -136,9 +232,7 @@ export default function Dashboard() {
                 <SkeletonBlock className="h-5 w-36" />
               </div>
               <div className="p-4 space-y-3">
-                {[1, 2, 3, 4].map(j => (
-                  <SkeletonBlock key={j} className="h-10" />
-                ))}
+                {[1, 2, 3, 4].map(j => <SkeletonBlock key={j} className="h-10" />)}
               </div>
             </div>
           ))}
@@ -147,13 +241,14 @@ export default function Dashboard() {
     );
   }
 
-  const vendors = lbData?.vendors || [];
-  const riders  = lbData?.riders  || [];
+  const vendors: VendorEntry[] = lbData?.vendors ?? [];
+  const riders:  RiderEntry[]  = lbData?.riders  ?? [];
 
   const statsData       = data as Record<string, unknown> | undefined;
-  const activeSosCount  = typeof statsData?.activeSos    === "number" ? statsData.activeSos    : 0;
-  const pendingOrders   = typeof statsData?.pendingOrders === "number" ? statsData.pendingOrders : 0;
-  const activeRides     = typeof statsData?.activeRides  === "number" ? statsData.activeRides  : 0;
+  /* FIX 5: `?? 0` instead of `|| 0` throughout */
+  const activeSosCount  = typeof statsData?.activeSos     === "number" ? statsData.activeSos     : 0;
+  const pendingOrders   = typeof statsData?.pendingOrders  === "number" ? statsData.pendingOrders  : 0;
+  const activeRides     = typeof statsData?.activeRides   === "number" ? statsData.activeRides   : 0;
 
   const lastUpdated = dataUpdatedAt ? updatedAgo(dataUpdatedAt) : "";
 
@@ -166,7 +261,14 @@ export default function Dashboard() {
         iconBgClass="bg-indigo-100"
         iconColorClass="text-indigo-600"
         actions={
-          <Button variant="outline" size="sm" onClick={() => exportDashboard(trend, (msg) => toast({ title: "Export failed", description: msg, variant: "destructive" }))} className="h-9 rounded-xl gap-2 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => exportDashboard(trend, (msg) =>
+              toast({ title: "Export failed", description: msg, variant: "destructive" })
+            )}
+            className="h-9 rounded-xl gap-2 shrink-0"
+          >
             <Download className="w-4 h-4" /> {T("export")}
           </Button>
         }
@@ -186,7 +288,8 @@ export default function Dashboard() {
                 <Sparkline data={revenueSparkData} color="rgba(255,255,255,0.8)" />
               </div>
               <p className="text-white/70 text-xs font-medium mb-1">Total Revenue</p>
-              <h3 className="text-xl font-bold">{formatCurrency(data?.revenue?.total || 0)}</h3>
+              {/* FIX 5: ?? 0 */}
+              <h3 className="text-xl font-bold">{formatCurrency(data?.revenue?.total ?? 0)}</h3>
             </CardContent>
           </Card>
         </HeroCardLink>
@@ -226,15 +329,24 @@ export default function Dashboard() {
         </HeroCardLink>
 
         {/* Active SOS → /sos-alerts */}
+        {/* FIX 4: removed duplicate animate-pulse from the icon */}
         <Link href="/sos-alerts">
-          <Card className={`rounded-2xl border-0 shadow-md overflow-hidden relative cursor-pointer transition-transform hover:-translate-y-0.5 ${activeSosCount > 0 ? "bg-gradient-to-br from-red-600 to-red-800" : "bg-gradient-to-br from-slate-500 to-slate-700"} text-white`}>
+          <Card className={`rounded-2xl border-0 shadow-md overflow-hidden relative cursor-pointer transition-transform hover:-translate-y-0.5 ${
+            activeSosCount > 0
+              ? "bg-gradient-to-br from-red-600 to-red-800"
+              : "bg-gradient-to-br from-slate-500 to-slate-700"
+          } text-white`}>
             {activeSosCount > 0 && (
-              <div className="absolute inset-0 animate-pulse bg-red-400/10" style={{ animationDuration: "1s" }} />
+              <div
+                className="absolute inset-0 bg-red-400/10"
+                style={{ animation: "pulse 1s ease-in-out infinite" }}
+              />
             )}
             <div className="absolute -right-4 -top-4 w-24 h-24 rounded-full bg-white/10" />
             <CardContent className="p-5 relative">
               <div className="flex items-start justify-between mb-3">
-                <div className={`w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center ${activeSosCount > 0 ? "animate-pulse" : ""}`}>
+                {/* FIX 4: icon no longer has its own animate-pulse */}
+                <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center">
                   <AlertTriangle className="w-5 h-5 text-white" />
                 </div>
                 <Sparkline data={sosSparkData} color="rgba(255,255,255,0.8)" />
@@ -248,19 +360,22 @@ export default function Dashboard() {
 
       {/* Revenue Breakdown */}
       <div>
-        <h2 className="text-lg sm:text-xl font-display font-bold text-foreground mb-3 sm:mb-4">{T("revenueBreakdown")}</h2>
+        <h2 className="text-lg sm:text-xl font-display font-bold text-foreground mb-3 sm:mb-4">
+          {T("revenueBreakdown")}
+        </h2>
         <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           <Card className="col-span-2 sm:col-span-2 lg:col-span-1 rounded-2xl bg-gradient-to-br from-primary to-blue-700 text-white shadow-lg shadow-primary/20 border-none">
             <CardContent className="p-4 sm:p-6">
               <p className="text-white/80 font-medium text-xs sm:text-sm mb-1 sm:mb-2 flex items-center gap-2">
                 <TrendingUp className="w-4 h-4" /> {T("grandTotal")}
               </p>
-              <h3 className="text-xl sm:text-2xl font-bold">{formatCurrency(data?.revenue?.total || 0)}</h3>
+              {/* FIX 5: ?? 0 */}
+              <h3 className="text-xl sm:text-2xl font-bold">{formatCurrency(data?.revenue?.total ?? 0)}</h3>
             </CardContent>
           </Card>
-          <StatCard icon={ShoppingBag} label="Mart & Food" value={formatCurrency(data?.revenue?.orders || 0)} iconBgClass="bg-orange-100" iconColorClass="text-orange-600" />
-          <StatCard icon={Car} label={T("ride")} value={formatCurrency(data?.revenue?.rides || 0)} iconBgClass="bg-blue-100" iconColorClass="text-blue-600" />
-          <StatCard icon={Pill} label={T("pharmacy")} value={formatCurrency(data?.revenue?.pharmacy || 0)} iconBgClass="bg-green-100" iconColorClass="text-green-600" />
+          <StatCard icon={ShoppingBag} label="Mart & Food" value={formatCurrency(data?.revenue?.orders ?? 0)} iconBgClass="bg-orange-100" iconColorClass="text-orange-600" />
+          <StatCard icon={Car} label={T("ride")} value={formatCurrency(data?.revenue?.rides ?? 0)} iconBgClass="bg-blue-100" iconColorClass="text-blue-600" />
+          <StatCard icon={Pill} label={T("pharmacy")} value={formatCurrency(data?.revenue?.pharmacy ?? 0)} iconBgClass="bg-green-100" iconColorClass="text-green-600" />
         </div>
       </div>
 
@@ -279,17 +394,29 @@ export default function Dashboard() {
                     <stop offset="95%" stopColor="#6366F1" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                  tickFormatter={d => new Date(d).toLocaleDateString("en-US", { weekday: "short" })} />
-                <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                  tickFormatter={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} width={40} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                  tickFormatter={d => new Date(d).toLocaleDateString("en-US", { weekday: "short" })}
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                  tickFormatter={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)}
+                  width={40}
+                />
                 <Tooltip
                   contentStyle={{ borderRadius: "12px", fontSize: "12px", border: "1px solid hsl(var(--border))" }}
-                  formatter={(v: any) => [`Rs. ${Math.round(v).toLocaleString()}`, T("revenue")]}
+                  formatter={(v: number) => [`Rs. ${Math.round(v).toLocaleString()}`, T("revenue")]}
                   labelFormatter={l => new Date(l).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
                 />
-                <Area type="monotone" dataKey="revenue" stroke="#6366F1" strokeWidth={2}
-                  fill="url(#revGrad)" dot={{ fill: "#6366F1", r: 3 }} />
+                <Area
+                  type="monotone"
+                  dataKey="revenue"
+                  stroke="#6366F1"
+                  strokeWidth={2}
+                  fill="url(#revGrad)"
+                  dot={{ fill: "#6366F1", r: 3 }}
+                />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -311,14 +438,14 @@ export default function Dashboard() {
           <div>
             {!vendors.length ? (
               <div className="p-8 text-center text-muted-foreground text-sm">{T("noVendorData")}</div>
-            ) : vendors.map((v: any, idx: number) => (
+            ) : vendors.map((v, idx) => (
               <div key={v.id} className="px-4 sm:px-6 py-3 sm:py-4 flex items-center gap-3 hover:bg-indigo-50/50 transition-colors">
                 <span className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-extrabold shrink-0
                   ${idx === 0 ? "bg-amber-100 text-amber-700" : idx === 1 ? "bg-slate-100 text-slate-600" : idx === 2 ? "bg-orange-100 text-orange-600" : "bg-muted text-muted-foreground"}`}>
                   {idx + 1}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm truncate">{v.name || v.phone}</p>
+                  <p className="font-semibold text-sm truncate">{v.name ?? v.phone}</p>
                   <p className="text-xs text-muted-foreground">{v.totalOrders} {T("myOrders").toLowerCase()}</p>
                 </div>
                 <p className="font-bold text-sm text-foreground shrink-0">{formatCurrency(v.totalRevenue)}</p>
@@ -340,14 +467,14 @@ export default function Dashboard() {
           <div>
             {!riders.length ? (
               <div className="p-8 text-center text-muted-foreground text-sm">{T("noRiderData")}</div>
-            ) : riders.map((r: any, idx: number) => (
+            ) : riders.map((r, idx) => (
               <div key={r.id} className="px-4 sm:px-6 py-3 sm:py-4 flex items-center gap-3 hover:bg-indigo-50/50 transition-colors">
                 <span className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-extrabold shrink-0
                   ${idx === 0 ? "bg-amber-100 text-amber-700" : idx === 1 ? "bg-slate-100 text-slate-600" : idx === 2 ? "bg-orange-100 text-orange-600" : "bg-muted text-muted-foreground"}`}>
                   {idx + 1}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm truncate">{r.name || r.phone}</p>
+                  <p className="font-semibold text-sm truncate">{r.name ?? r.phone}</p>
                   <p className="text-xs text-muted-foreground">{r.completedTrips} trips</p>
                 </div>
                 <p className="font-bold text-sm text-foreground shrink-0">{formatCurrency(r.totalEarned)}</p>
@@ -373,7 +500,7 @@ export default function Dashboard() {
             {!data?.recentOrders?.length ? (
               <div className="p-8 text-center text-muted-foreground text-sm">{T("noRecentOrders")}</div>
             ) : (
-              data.recentOrders.map((order: any) => (
+              (data.recentOrders as OrderEntry[]).map((order) => (
                 <div key={order.id} className="px-4 sm:px-6 py-3 sm:py-4 hover:bg-indigo-50/40 transition-colors flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 mb-1">
@@ -406,7 +533,7 @@ export default function Dashboard() {
             {!data?.recentRides?.length ? (
               <div className="p-8 text-center text-muted-foreground text-sm">{T("noRecentRides")}</div>
             ) : (
-              data.recentRides.map((ride: any) => (
+              (data.recentRides as RideEntry[]).map((ride) => (
                 <div key={ride.id} className="px-4 sm:px-6 py-3 sm:py-4 hover:bg-indigo-50/40 transition-colors flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 mb-1">
@@ -431,10 +558,10 @@ export default function Dashboard() {
         <h2 className="text-base font-bold mb-3">{T("quickAccess")}</h2>
         <div className="grid grid-cols-2 gap-3">
           {[
-            { label: T("pharmacy"), href: "/pharmacy", icon: Pill, color: "text-pink-600", bg: "bg-pink-50 border-pink-200" },
-            { label: T("parcel"), href: "/parcel", icon: Box, color: "text-orange-600", bg: "bg-orange-50 border-orange-200" },
-            { label: T("transactions"), href: "/transactions", icon: Wallet, color: "text-sky-600", bg: "bg-sky-50 border-sky-200" },
-            { label: T("settings"), href: "/settings", icon: Package, color: "text-gray-600", bg: "bg-gray-50 border-gray-200" },
+            { label: T("pharmacy"),     href: "/pharmacy",     icon: Pill,    color: "text-pink-600",  bg: "bg-pink-50 border-pink-200" },
+            { label: T("parcel"),       href: "/parcel",       icon: Box,     color: "text-orange-600", bg: "bg-orange-50 border-orange-200" },
+            { label: T("transactions"), href: "/transactions", icon: Wallet,  color: "text-sky-600",   bg: "bg-sky-50 border-sky-200" },
+            { label: T("settings"),     href: "/settings",     icon: Package, color: "text-gray-600",  bg: "bg-gray-50 border-gray-200" },
           ].map(item => (
             <Link key={item.href} href={item.href}>
               <div className={`flex items-center gap-3 p-4 rounded-2xl border cursor-pointer active:scale-95 transition-transform ${item.bg}`}>
@@ -446,21 +573,5 @@ export default function Dashboard() {
         </div>
       </div>
     </PullToRefresh>
-  );
-}
-
-/* Rounded pill status badge */
-function StatusPill({ status }: { status: string }) {
-  const s = status?.toLowerCase() || "";
-  let cls = "bg-gray-100 text-gray-600";
-  if (s === "completed" || s === "delivered") cls = "bg-emerald-100 text-emerald-700";
-  else if (s === "cancelled" || s === "rejected") cls = "bg-red-100 text-red-600";
-  else if (s === "pending") cls = "bg-amber-100 text-amber-700";
-  else if (s === "in_transit" || s === "accepted" || s === "active") cls = "bg-indigo-100 text-indigo-700";
-  else if (s === "searching" || s === "bargaining") cls = "bg-blue-100 text-blue-700";
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${cls}`}>
-      {status.replace(/_/g, " ")}
-    </span>
   );
 }

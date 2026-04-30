@@ -71,8 +71,10 @@ export async function fetchAdmin(
     ...(options.headers as Record<string, string> | undefined),
   };
 
+  const normalizedEndpoint = endpoint.startsWith("/admin/") ? endpoint.slice("/admin".length) : endpoint;
+
   const makeRequest = async (accessToken: string) => {
-    const response = await fetch(`/api/admin${endpoint}`, {
+    const response = await fetch(`/api/admin${normalizedEndpoint}`, {
       ...options,
       headers: {
         ...headers,
@@ -89,7 +91,7 @@ export async function fetchAdmin(
         headers['Authorization'] = `Bearer ${newToken}`;
 
         // Retry the request with new token
-        const retryResponse = await fetch(`/api/admin${endpoint}`, {
+        const retryResponse = await fetch(`/api/admin${normalizedEndpoint}`, {
           ...options,
           headers,
           credentials: 'include',

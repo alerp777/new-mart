@@ -29,7 +29,6 @@ import releaseNotesRoutes from "./admin/release-notes.js";
 import launchRoutes, { ensureLaunchData } from "./admin/launch.js";
 import otpRoutes from "./admin/otp.js";
 import smsGatewaysRoutes from "./admin/sms-gateways.js";
-import whitelistRoutes from "./admin/whitelist.js";
 import inventorySettingsRoutes from "./admin/inventory-settings.js";
 
 export {
@@ -88,11 +87,10 @@ router.use(userAddressesRoutes);
 router.use(experimentsRoutes);
 router.use(webhookRegistrationsRoutes);
 router.use(deepLinksRoutes);
-router.use(releaseNotesRoutes);
+router.use("/admin", releaseNotesRoutes);
 router.use("/launch", launchRoutes);
 router.use(otpRoutes);
 router.use("/sms-gateways", smsGatewaysRoutes);
-router.use("/whitelist", whitelistRoutes);
 router.use(inventorySettingsRoutes);
 
 export default router;

@@ -90,7 +90,11 @@ export default defineConfig({
     port,
     host: "0.0.0.0",
     allowedHosts: true,
-    hmr: { clientPort: 443, protocol: "wss" },
+    hmr: {
+      clientPort: 443,
+      protocol: "wss",
+      path: `${basePath.replace(/\/$/, "")}/@vite/ws`,
+    },
     proxy: {
       "/api": {
         target: apiProxyTarget,

@@ -394,8 +394,8 @@ router.delete("/users/:id/otp/bypass", async (req, res) => {
 /* WHITELIST CRUD ENDPOINTS                                                   */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
-/* ─── GET /admin/whitelist ────────────────────────────────────────────────────*/
-router.get("/whitelist", async (_req, res) => {
+/* ─── GET /admin/otp/whitelist ────────────────────────────────────────────────────*/
+router.get("/otp/whitelist", async (_req, res) => {
   try {
     const entries = await db.query.whitelistUsersTable.findMany({
       orderBy: desc(whitelistUsersTable.createdAt),
@@ -408,8 +408,8 @@ router.get("/whitelist", async (_req, res) => {
   }
 });
 
-/* ─── POST /admin/whitelist ───────────────────────────────────────────────────*/
-router.post("/whitelist", async (req, res) => {
+/* ─── POST /admin/otp/whitelist ───────────────────────────────────────────────────*/
+router.post("/otp/whitelist", async (req, res) => {
   const { identifier, label, bypassCode, expiresAt } = req.body;
   const adminReq = req as AdminRequest;
   const code = (bypassCode || generateBypassCode()).trim();
@@ -484,8 +484,8 @@ router.post("/whitelist", async (req, res) => {
   }
 });
 
-/* ─── PATCH /admin/whitelist/:id ──────────────────────────────────────────────*/
-router.patch("/whitelist/:id", async (req, res) => {
+/* ─── PATCH /admin/otp/whitelist/:id ──────────────────────────────────────────────────*/
+router.patch("/otp/whitelist/:id", async (req, res) => {
   const id = req.params["id"]!;
   const updates = (req.body ?? {}) as Partial<WhitelistUpdate> & { expiresAt?: string | Date | null };
   const adminReq = req as AdminRequest;
@@ -548,8 +548,8 @@ router.patch("/whitelist/:id", async (req, res) => {
   }
 });
 
-/* ─── DELETE /admin/whitelist/:id ─────────────────────────────────────────────*/
-router.delete("/whitelist/:id", async (req, res) => {
+/* ─── DELETE /admin/otp/whitelist/:id ─────────────────────────────────────────────────*/
+router.delete("/otp/whitelist/:id", async (req, res) => {
   const id = req.params["id"]!;
   const adminReq = req as AdminRequest;
 

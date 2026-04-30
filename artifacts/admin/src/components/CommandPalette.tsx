@@ -5,7 +5,7 @@ import { fetcher, apiAbsoluteFetchRaw } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import {
   ShoppingBag, Car, Pill,
-  Search, ArrowRight, X, User, Hash, Shield, Navigation,
+  Search, ArrowRight, X, User, Hash,
   Star, BadgeCheck, BanknoteIcon,
   Sparkles, Brain, Filter, Zap, CheckCircle2, Loader2,
 } from "lucide-react";
@@ -16,7 +16,7 @@ import { safeLocalGet, safeLocalSet } from "@/lib/safeStorage";
 import { getAdminTiming } from "@/lib/adminTiming";
 import { escapeHtml } from "@/lib/escapeHtml";
 
-/* ── Live search result types — replace the previous `any[]` lists ───── */
+/* ── Live search result types ─────────────────────────────────────────── */
 interface LiveUser {
   id?: string;
   name?: string;
@@ -39,6 +39,7 @@ interface LiveOrder {
   status?: string;
   deliveryAddress?: string;
   total?: string | number;
+  _pharm?: boolean;
 }
 
 interface LiveSearchResponse {
@@ -54,7 +55,18 @@ type CmdItem =
   | (LiveRide & { _type: "ride" })
   | (LiveOrder & { _type: "order"; _pharm?: boolean });
 
-/* ─── Keywords that signal a command intent (not a search) ─────────────── */
+/* ── FIX 1: Proper type guards (replaces risky `!item._type` check) ──── */
+function isStaticEntry(item: CmdItem): item is SearchEntry & { _aiResult?: boolean; _aiReason?: string } {
+  return !("_type" in item) || (item as { _type?: string })._type === undefined;
+}
+
+/* ── FIX 2: Safe fare parser (handles "Rs. 150", NaN, undefined) ─────── */
+function parseFare(val: string | number | undefined): number {
+  const n = parseFloat(String(val ?? "0").replace(/[^0-9.]/g, ""));
+  return isNaN(n) ? 0 : Math.round(n);
+}
+
+/* ── Command keywords ──────────────────────────────────────────────────── */
 const CMD_KEYWORDS = [
   "enable", "disable", "turn on", "turn off", "activate", "deactivate",
   "set ", "change ", "update ", "maintenance", "band kar", "chalu kar",
@@ -65,27 +77,26 @@ function isCommandLike(q: string): boolean {
   return q.length >= 8 && CMD_KEYWORDS.some(kw => lower.includes(kw));
 }
 
-/* ─── Ride & Order status color ───────────────────────────────────────── */
+/* ── Ride & Order status color ─────────────────────────────────────────── */
 const STATUS_COLORS: Record<string, string> = {
-  searching:   "bg-blue-100 text-blue-700",
-  bargaining:  "bg-orange-100 text-orange-700",
-  accepted:    "bg-purple-100 text-purple-700",
-  arrived:     "bg-indigo-100 text-indigo-700",
-  in_transit:  "bg-cyan-100 text-cyan-700",
-  completed:   "bg-green-100 text-green-700",
-  delivered:   "bg-green-100 text-green-700",
-  cancelled:   "bg-red-100 text-red-700",
-  pending:     "bg-yellow-100 text-yellow-700",
-  active:      "bg-emerald-100 text-emerald-700",
+  searching:  "bg-blue-100 text-blue-700",
+  bargaining: "bg-orange-100 text-orange-700",
+  accepted:   "bg-purple-100 text-purple-700",
+  arrived:    "bg-indigo-100 text-indigo-700",
+  in_transit: "bg-cyan-100 text-cyan-700",
+  completed:  "bg-green-100 text-green-700",
+  delivered:  "bg-green-100 text-green-700",
+  cancelled:  "bg-red-100 text-red-700",
+  pending:    "bg-yellow-100 text-yellow-700",
+  active:     "bg-emerald-100 text-emerald-700",
 };
 
-/* ─── Category filter config ──────────────────────────────────────────── */
+/* ── Category filter config ────────────────────────────────────────────── */
 type FilterTab = "All" | SearchCategory;
 const FILTER_TABS: FilterTab[] = ["All", "Pages", "Settings", "Actions", "Users", "Orders", "Rides"];
 const STATUS_FILTERS = ["pending", "active", "completed", "cancelled"] as const;
 type StatusFilter = typeof STATUS_FILTERS[number];
 
-/* Status ↔ DB value aliases */
 const STATUS_ALIASES: Record<StatusFilter, string[]> = {
   pending:   ["pending"],
   active:    ["accepted", "active", "in_transit", "arrived", "searching", "bargaining"],
@@ -93,30 +104,19 @@ const STATUS_ALIASES: Record<StatusFilter, string[]> = {
   cancelled: ["cancelled", "canceled"],
 };
 
-/* ─── Highlight matching text ─────────────────────────────────────────── */
-/**
- * Renders `text` with the substring matching `query` wrapped in a `<mark>`.
- *
- * Defence-in-depth: even though React would auto-escape JSX text children,
- * this implementation uses `dangerouslySetInnerHTML` so it can wrap the
- * highlighted slice in a real `<mark>` tag. To stay safe, BOTH the source
- * text and the query are run through `escapeHtml` before any string
- * concatenation, and only the literal `<mark>` open/close tags we control
- * are emitted as raw HTML — user-controlled bytes can therefore never
- * reach the DOM as markup.
- */
+/* ── Highlight matching text ───────────────────────────────────────────── */
 function Highlight({ text, query }: { text: string; query: string }) {
   if (!query || query.length < 2) return <span>{text}</span>;
   const idx = text.toLowerCase().indexOf(query.toLowerCase());
   if (idx < 0) return <span>{text}</span>;
   const before = escapeHtml(text.slice(0, idx));
-  const match = escapeHtml(text.slice(idx, idx + query.length));
-  const after = escapeHtml(text.slice(idx + query.length));
-  const html = `${before}<mark class="bg-yellow-200 text-yellow-900 rounded px-0.5">${match}</mark>${after}`;
+  const match  = escapeHtml(text.slice(idx, idx + query.length));
+  const after  = escapeHtml(text.slice(idx + query.length));
+  const html   = `${before}<mark class="bg-yellow-200 text-yellow-900 rounded px-0.5">${match}</mark>${after}`;
   return <span dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-/* ─── AI result type ─────────────────────────────────────────────────── */
+/* ── AI result type ────────────────────────────────────────────────────── */
 interface AiResult {
   id: string;
   title: string;
@@ -124,7 +124,7 @@ interface AiResult {
   reason?: string;
 }
 
-/* ─── Component ───────────────────────────────────────────────────────── */
+/* ── Component ─────────────────────────────────────────────────────────── */
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
@@ -151,10 +151,10 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const [aiEnabled, setAiEnabled] = useState(() => safeLocalGet("admin-ai-search") === "on");
   const [cmdExecuting, setCmdExecuting] = useState(false);
   const [cmdResult, setCmdResult] = useState<CmdResult | null>(null);
-  const inputRef  = useRef<HTMLInputElement>(null);
-  const listRef   = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef  = useRef<HTMLDivElement>(null);
 
-  /* ── Execute a natural-language command via AI ─────────────────────── */
+  /* ── Execute command ── */
   const executeCmd = useCallback(async (cmdText: string) => {
     setCmdExecuting(true);
     setCmdResult(null);
@@ -201,7 +201,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     });
   };
 
-  /* ── Debounced query for backend calls ── */
+  /* ── Debounced query ── */
   const [debouncedQ, setDebouncedQ] = useState("");
   useEffect(() => {
     const t = setTimeout(
@@ -211,17 +211,27 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     return () => clearTimeout(t);
   }, [query]);
 
-  /* ── Build backend filter params ── */
+  /* ── FIX 3: Reset cmdResult immediately on query change ── */
+  useEffect(() => {
+    setCmdResult(null);
+  }, [query]);
+
+  /* ── Backend filter params ── */
   const backendParams = new URLSearchParams();
   backendParams.set("q", debouncedQ);
-  if (activeFilter !== "All" && activeFilter !== "Pages" && activeFilter !== "Settings" && activeFilter !== "Actions") {
+  if (
+    activeFilter !== "All" &&
+    activeFilter !== "Pages" &&
+    activeFilter !== "Settings" &&
+    activeFilter !== "Actions"
+  ) {
     backendParams.set("category", activeFilter.toLowerCase());
   }
   if (activeStatus) {
     backendParams.set("status", STATUS_ALIASES[activeStatus].join(","));
   }
 
-  /* ── Live DB search (with filter params) ── */
+  /* ── Live DB search ── */
   const { data: liveData, isFetching } = useQuery({
     queryKey: ["cmd-search", debouncedQ, activeFilter, activeStatus],
     queryFn:  () => fetcher(`/admin/search?${backendParams.toString()}`),
@@ -229,7 +239,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     staleTime: getAdminTiming().commandPaletteLiveStaleMs,
   });
 
-  /* ── AI search (authenticated via adminFetcher) ── */
+  /* ── AI search ── */
   const { data: aiData, isFetching: aiLoading } = useQuery({
     queryKey: ["cmd-ai-search", debouncedQ, aiEnabled],
     queryFn:  async () => {
@@ -238,25 +248,27 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         body: JSON.stringify({ query: debouncedQ }),
       });
     },
-    enabled: aiEnabled && debouncedQ.length >= 5,
+    enabled:   aiEnabled && debouncedQ.length >= 5,
     staleTime: getAdminTiming().commandPaletteAiStaleMs,
-    retry: false,
+    retry:     false,
   });
 
-  /* ── Consume AI suggestedFilters ── */
+  /* ── FIX 4: AI suggested filters — stable dep + activeStatus in deps ── */
   const aiSuggestedFilters: string[] = aiData?.data?.suggestedFilters ?? aiData?.suggestedFilters ?? [];
+  const aiSuggestedFiltersKey = aiSuggestedFilters.join(",");
+
   useEffect(() => {
     if (aiSuggestedFilters.length === 0) return;
-    /* Auto-apply first matching status filter from AI suggestion */
     const suggestedStatus = aiSuggestedFilters.find(f =>
       STATUS_FILTERS.includes(f as StatusFilter)
     ) as StatusFilter | undefined;
     if (suggestedStatus && !activeStatus) {
       setActiveStatus(suggestedStatus);
     }
-  }, [JSON.stringify(aiSuggestedFilters)]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiSuggestedFiltersKey, activeStatus]);
 
-  /* ── Local static search (transliteration + fuzzy) ── */
+  /* ── Local static search ── */
   const q = query.trim().toLowerCase();
 
   const localStaticItems: SearchEntry[] = q.length < 1
@@ -268,7 +280,6 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         matchesKeywords(q, e.keywords, e.urduKeywords, e.romanUrduKeywords)
       );
 
-  /* Apply category filter to static items */
   const filteredStaticItems =
     activeFilter === "All"
       ? localStaticItems
@@ -276,7 +287,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         ? []
         : localStaticItems.filter(e => e.category === activeFilter);
 
-  /* ── AI results enriched with full index entries ── */
+  /* ── AI enriched items ── */
   const aiResults: AiResult[] = aiData?.data?.results ?? aiData?.results ?? [];
   const aiEnrichedItems: Array<SearchEntry & { _aiReason?: string }> = aiResults.flatMap(r => {
     const entry = SEARCH_INDEX.find(e => e.id === r.id);
@@ -290,19 +301,17 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const liveOrders:   LiveOrder[] = live.orders   ?? [];
   const livePharmacy: LiveOrder[] = live.pharmacy ?? [];
 
-  /* Apply per-category filtering */
   const showUsers  = activeFilter === "All" || activeFilter === "Users";
   const showRides  = activeFilter === "All" || activeFilter === "Rides";
   const showOrders = activeFilter === "All" || activeFilter === "Orders";
 
-  /* Client-side status filter on live results */
   const filterByStatus = <T extends { status?: string }>(items: T[]): T[] => {
     if (!activeStatus) return items;
     const accepted = STATUS_ALIASES[activeStatus];
     return items.filter(i => accepted.includes(i.status ?? ""));
   };
 
-  /* Build full item list: AI → static → live */
+  /* ── Full item list ── */
   const allItems: CmdItem[] = [
     ...aiEnrichedItems.map(e => ({ ...e, _aiResult: true } as CmdItem)),
     ...filteredStaticItems
@@ -318,10 +327,9 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       : []),
   ];
 
-  /* ── Reset selection on list/query change; clear stale cmd result ── */
+  /* ── Reset selection on list change ── */
   useEffect(() => {
     setSelected(0);
-    setCmdResult(null);
   }, [allItems.length, debouncedQ]);
 
   /* ── Reset on open ── */
@@ -332,22 +340,23 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       setSelected(0);
       setActiveFilter("All");
       setActiveStatus(null);
+      setCmdResult(null);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [open]);
 
-  /* ── Navigate to item (with query params intact for filtered views) ── */
+  /* ── FIX 5: Direct navigation to ride/order detail pages ── */
   const navigate = useCallback((item: CmdItem) => {
-    const path = (item as SearchEntry).path ?? (item as { href?: string }).href;
-    if (path) {
-      /* Path may already contain query params (e.g. /orders?status=pending) */
-      setLocation(path);
+    if (isStaticEntry(item)) {
+      const path = (item as SearchEntry).path ?? (item as { href?: string }).href;
+      if (path) setLocation(path);
     } else if (item._type === "user") {
-      setLocation("/users");
+      // Navigate to user detail if id exists, else list
+      setLocation(item.id ? `/users/${item.id}` : "/users");
     } else if (item._type === "ride") {
-      setLocation("/rides");
+      setLocation(item.id ? `/rides/${item.id}` : "/rides");
     } else if (item._type === "order") {
-      setLocation("/orders");
+      setLocation(item.id ? `/orders/${item.id}` : "/orders");
     }
     onClose();
   }, [setLocation, onClose]);
@@ -356,7 +365,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { onClose(); return; }
+      if (e.key === "Escape")    { onClose(); return; }
       if (e.key === "ArrowDown") { e.preventDefault(); setSelected(s => Math.min(s + 1, allItems.length - 1)); }
       if (e.key === "ArrowUp")   { e.preventDefault(); setSelected(s => Math.max(s - 1, 0)); }
       if (e.key === "Enter" && allItems[selected]) { e.preventDefault(); navigate(allItems[selected]); }
@@ -376,11 +385,13 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   /* ── Group headers ── */
   const getGroup = (item: CmdItem, idx: number): string | null => {
     const groupOf = (it: CmdItem): string | null => {
-      if ("_aiResult" in it && it._aiResult) return "AI Suggestions";
+      if (isStaticEntry(it) && (it as { _aiResult?: boolean })._aiResult) return "AI Suggestions";
       if ("_type" in it && it._type === "user")  return "Users";
       if ("_type" in it && it._type === "ride")  return "Rides";
       if ("_type" in it && it._type === "order") return "Orders";
-      return "group" in it && typeof it.group === "string" ? it.group : null;
+      return isStaticEntry(it) && "group" in it && typeof (it as { group?: string }).group === "string"
+        ? (it as { group?: string }).group ?? null
+        : null;
     };
     const cur  = groupOf(item);
     const prev = idx > 0 ? groupOf(allItems[idx - 1]) : null;
@@ -390,8 +401,17 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const showStatusFilter = activeFilter === "Orders" || activeFilter === "Rides";
   const isLoading = isFetching || (aiEnabled && aiLoading && debouncedQ.length >= 5);
 
+  /* ── FIX 6: Empty state also shows when filters active but no results ── */
+  const showEmptyState =
+    allItems.length === 0 &&
+    !isLoading &&
+    (debouncedQ.length >= 2 || activeFilter !== "All" || activeStatus !== null);
+
   return (
-    <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[10vh] px-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[200] flex items-start justify-center pt-[10vh] px-4"
+      onClick={onClose}
+    >
       <div
         className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-border/60 overflow-hidden flex flex-col"
         style={{ maxHeight: "75vh" }}
@@ -404,9 +424,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             ref={inputRef}
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder={aiEnabled
-              ? "Type naturally in English, Urdu (اردو), or Roman Urdu..."
-              : "Search pages, settings, users, rides, orders..."}
+            placeholder={
+              aiEnabled
+                ? "Type naturally in English, Urdu (اردو), or Roman Urdu..."
+                : "Search pages, settings, users, rides, orders..."
+            }
             className="flex-1 bg-transparent text-sm font-medium outline-none placeholder:text-muted-foreground/60"
             autoComplete="off"
             spellCheck={false}
@@ -417,7 +439,10 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               <div className="w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
             )}
             {query && (
-              <button onClick={() => setQuery("")} className="p-0.5 rounded-md hover:bg-muted transition-colors">
+              <button
+                onClick={() => setQuery("")}
+                className="p-0.5 rounded-md hover:bg-muted transition-colors"
+              >
                 <X className="w-3.5 h-3.5 text-muted-foreground" />
               </button>
             )}
@@ -495,7 +520,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             </button>
           ))}
 
-          {/* Status sub-filter — contextual for Orders/Rides */}
+          {/* Status sub-filter */}
           {showStatusFilter && (
             <>
               <div className="w-px h-4 bg-border/50 mx-1 shrink-0" />
@@ -528,12 +553,31 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
         {/* ── Results list ── */}
         <div ref={listRef} className="overflow-y-auto flex-1">
-          {allItems.length === 0 && debouncedQ.length >= 2 && !isLoading && (
+
+          {/* ── Loading skeleton ── */}
+          {isLoading && allItems.length === 0 && (
+            <div className="py-4 px-4 space-y-2">
+              {[1, 2, 3].map(i => (
+                <div key={i} className="flex items-center gap-3 animate-pulse">
+                  <div className="w-8 h-8 rounded-lg bg-muted shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-3 bg-muted rounded w-1/3" />
+                    <div className="h-2.5 bg-muted/60 rounded w-1/2" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── Empty state (FIX 6: also triggers on active filter with no results) ── */}
+          {showEmptyState && (
             <div className="py-12 text-center text-sm text-muted-foreground">
               <Search className="w-8 h-8 mx-auto mb-3 opacity-20" />
               <p className="font-medium">Koi nateeja nahi mila</p>
-              <p className="text-xs mt-1 opacity-70">"{query}" ke liye kuch nahi mila</p>
-              {!aiEnabled && (
+              <p className="text-xs mt-1 opacity-70">
+                {debouncedQ ? `"${query}" ke liye` : `Is filter ke liye`} kuch nahi mila
+              </p>
+              {!aiEnabled && debouncedQ.length >= 2 && (
                 <button
                   onClick={toggleAi}
                   className="mt-3 px-3 py-1.5 rounded-lg bg-violet-100 text-violet-700 text-xs font-semibold flex items-center gap-1.5 mx-auto hover:bg-violet-200 transition-colors"
@@ -560,9 +604,9 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                   </div>
                 )}
 
-                {/* ── Static / AI result item ── */}
-                {!item._type && (() => {
-                  const Icon = item.icon;
+                {/* ── FIX 1 applied: use isStaticEntry() type guard ── */}
+                {isStaticEntry(item) && (() => {
+                  const Icon = (item as SearchEntry).icon;
                   return (
                     <button
                       data-idx={idx}
@@ -580,17 +624,17 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <p className={`text-sm font-semibold truncate ${isSelected ? "text-primary" : ""}`}>
-                            <Highlight text={item.title} query={query} />
+                            <Highlight text={(item as SearchEntry).title} query={query} />
                           </p>
-                          {item._aiResult && (
+                          {(item as { _aiResult?: boolean })._aiResult && (
                             <span className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-600 text-[9px] font-bold">
                               <Brain className="w-2.5 h-2.5" /> AI
                             </span>
                           )}
                         </div>
-                        {(item._aiReason ?? item.subtitle ?? item.hint) ? (
+                        {((item as { _aiReason?: string })._aiReason ?? (item as SearchEntry).subtitle ?? (item as SearchEntry).hint) ? (
                           <p className="text-xs text-muted-foreground truncate">
-                            {item._aiReason ?? item.subtitle ?? item.hint}
+                            {(item as { _aiReason?: string })._aiReason ?? (item as SearchEntry).subtitle ?? (item as SearchEntry).hint}
                           </p>
                         ) : null}
                       </div>
@@ -600,7 +644,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 })()}
 
                 {/* ── User result ── */}
-                {item._type === "user" && (
+                {"_type" in item && item._type === "user" && (
                   <button
                     data-idx={idx}
                     className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${isSelected ? "bg-primary/8" : "hover:bg-muted/50"}`}
@@ -608,21 +652,29 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     onMouseEnter={() => setSelected(idx)}
                   >
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm font-bold ${isSelected ? "bg-primary text-white" : "bg-primary/10 text-primary"}`}>
-                      {(item.name || "?").slice(0, 1).toUpperCase()}
+                      {((item as LiveUser).name || "?").slice(0, 1).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold truncate"><Highlight text={item.name || "Unnamed"} query={query} /></p>
-                        {item.role && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground uppercase">{item.role}</span>}
+                        <p className="text-sm font-semibold truncate">
+                          <Highlight text={(item as LiveUser).name || "Unnamed"} query={query} />
+                        </p>
+                        {(item as LiveUser).role && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground uppercase">
+                            {(item as LiveUser).role}
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs text-muted-foreground"><Highlight text={item.phone || item.email || "—"} query={query} /></p>
+                      <p className="text-xs text-muted-foreground">
+                        <Highlight text={(item as LiveUser).phone || (item as LiveUser).email || "—"} query={query} />
+                      </p>
                     </div>
                     <User className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                   </button>
                 )}
 
                 {/* ── Ride result ── */}
-                {item._type === "ride" && (
+                {"_type" in item && item._type === "ride" && (
                   <button
                     data-idx={idx}
                     className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${isSelected ? "bg-primary/8" : "hover:bg-muted/50"}`}
@@ -634,21 +686,34 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="text-xs font-mono text-muted-foreground">#{item.id?.slice(-8).toUpperCase()}</p>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md capitalize ${(item.status && STATUS_COLORS[item.status]) || "bg-muted text-muted-foreground"}`}>{item.status}</span>
-                        {item.offeredFare && <span className="text-[10px] text-orange-600 font-bold">💬 Rs.{Math.round(item.offeredFare)}</span>}
+                        <p className="text-xs font-mono text-muted-foreground">
+                          #{(item as LiveRide).id?.slice(-8)?.toUpperCase() || "—"}
+                        </p>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md capitalize ${
+                          ((item as LiveRide).status && STATUS_COLORS[(item as LiveRide).status!]) || "bg-muted text-muted-foreground"
+                        }`}>
+                          {(item as LiveRide).status}
+                        </span>
+                        {(item as LiveRide).offeredFare && (
+                          <span className="text-[10px] text-orange-600 font-bold">
+                            💬 Rs.{Math.round((item as LiveRide).offeredFare!)}
+                          </span>
+                        )}
                       </div>
-                      <p className="text-sm font-medium truncate"><Highlight text={item.pickupAddress || "—"} query={query} /></p>
-                      <p className="text-xs text-muted-foreground truncate">→ {item.dropAddress}</p>
+                      <p className="text-sm font-medium truncate">
+                        <Highlight text={(item as LiveRide).pickupAddress || "—"} query={query} />
+                      </p>
+                      <p className="text-xs text-muted-foreground truncate">→ {(item as LiveRide).dropAddress}</p>
                     </div>
+                    {/* FIX 2: parseFare used here */}
                     <div className="text-right shrink-0">
-                      <p className="text-xs font-bold">Rs. {Math.round(parseFloat(String(item.fare ?? "0")))}</p>
+                      <p className="text-xs font-bold">Rs. {parseFare((item as LiveRide).fare)}</p>
                     </div>
                   </button>
                 )}
 
                 {/* ── Order result ── */}
-                {item._type === "order" && (
+                {"_type" in item && item._type === "order" && (
                   <button
                     data-idx={idx}
                     className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${isSelected ? "bg-primary/8" : "hover:bg-muted/50"}`}
@@ -656,20 +721,31 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     onMouseEnter={() => setSelected(idx)}
                   >
                     <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${isSelected ? "bg-green-100" : "bg-muted"}`}>
-                      {item._pharm
+                      {(item as LiveOrder)._pharm
                         ? <Pill className="w-4 h-4 text-green-600" />
                         : <ShoppingBag className="w-4 h-4 text-green-600" />}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="text-xs font-mono text-muted-foreground">#{item.id?.slice(-8).toUpperCase()}</p>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md capitalize ${(item.status && STATUS_COLORS[item.status]) || "bg-muted text-muted-foreground"}`}>{item.status}</span>
-                        {item._pharm && <span className="text-[10px] text-purple-600 font-bold">Pharmacy</span>}
+                        <p className="text-xs font-mono text-muted-foreground">
+                          #{(item as LiveOrder).id?.slice(-8)?.toUpperCase() || "—"}
+                        </p>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md capitalize ${
+                          ((item as LiveOrder).status && STATUS_COLORS[(item as LiveOrder).status!]) || "bg-muted text-muted-foreground"
+                        }`}>
+                          {(item as LiveOrder).status}
+                        </span>
+                        {(item as LiveOrder)._pharm && (
+                          <span className="text-[10px] text-purple-600 font-bold">Pharmacy</span>
+                        )}
                       </div>
-                      <p className="text-sm font-medium truncate"><Highlight text={item.deliveryAddress || "—"} query={query} /></p>
+                      <p className="text-sm font-medium truncate">
+                        <Highlight text={(item as LiveOrder).deliveryAddress || "—"} query={query} />
+                      </p>
                     </div>
+                    {/* FIX 2: parseFare used here */}
                     <div className="text-right shrink-0">
-                      <p className="text-xs font-bold">Rs. {Math.round(parseFloat(String(item.total ?? "0")))}</p>
+                      <p className="text-xs font-bold">Rs. {parseFare((item as LiveOrder).total)}</p>
                     </div>
                   </button>
                 )}
@@ -680,9 +756,15 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           {/* Footer */}
           {allItems.length > 0 && (
             <div className="border-t border-border/30 px-4 py-2.5 flex items-center gap-4 text-[10px] text-muted-foreground/50">
-              <span className="flex items-center gap-1"><kbd className="bg-muted border border-border rounded px-1 font-mono">↑↓</kbd> navigate</span>
-              <span className="flex items-center gap-1"><kbd className="bg-muted border border-border rounded px-1 font-mono">↵</kbd> select</span>
-              <span className="flex items-center gap-1"><kbd className="bg-muted border border-border rounded px-1 font-mono">esc</kbd> close</span>
+              <span className="flex items-center gap-1">
+                <kbd className="bg-muted border border-border rounded px-1 font-mono">↑↓</kbd> navigate
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="bg-muted border border-border rounded px-1 font-mono">↵</kbd> select
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="bg-muted border border-border rounded px-1 font-mono">esc</kbd> close
+              </span>
               <span className="ml-auto flex items-center gap-1">
                 <Hash className="w-3 h-3" /> {allItems.length} results
               </span>

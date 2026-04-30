@@ -1551,7 +1551,7 @@ export const useOtpWhitelist = () =>
      into every consumer of `entries`. */
   useQuery<OtpWhitelistResponse>({
     queryKey: ["admin-otp-whitelist"],
-    queryFn: () => fetcher("/admin/whitelist"),
+    queryFn: () => fetcher("/otp/whitelist"),
     refetchInterval: 30_000,
   });
 
@@ -1562,7 +1562,7 @@ export const useAddOtpWhitelist = () => {
        router — every "Add" call would 404. Aligned with the route in
        `artifacts/api-server/src/routes/admin/otp.ts`. */
     mutationFn: (data: AddOtpWhitelistInput) =>
-      fetcher("/admin/whitelist", { method: "POST", body: JSON.stringify(data) }),
+      fetcher("/otp/whitelist", { method: "POST", body: JSON.stringify(data) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-otp-whitelist"] }),
   });
 };
@@ -1571,7 +1571,7 @@ export const useUpdateOtpWhitelist = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...data }: UpdateOtpWhitelistInput) =>
-      fetcher(`/admin/whitelist/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+      fetcher(`/otp/whitelist/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-otp-whitelist"] }),
   });
 };
@@ -1579,7 +1579,7 @@ export const useUpdateOtpWhitelist = () => {
 export const useDeleteOtpWhitelist = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => fetcher(`/admin/whitelist/${id}`, { method: "DELETE" }),
+    mutationFn: (id: string) => fetcher(`/otp/whitelist/${id}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-otp-whitelist"] }),
   });
 };
