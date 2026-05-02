@@ -86,6 +86,9 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    force: true,
+  },
   server: {
     port,
     host: "0.0.0.0",
