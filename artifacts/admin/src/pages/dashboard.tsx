@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState, useId } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { PageHeader, StatCard } from "@/components/shared";
 import {
@@ -137,7 +137,9 @@ function updatedAgo(ts: number): string {
   if (diff < 60) return `${diff}s ago`;
   const m = Math.floor(diff / 60);
   if (m < 60)    return `${m}m ago`;
-  return `${Math.floor(m / 60)}h ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24)    return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }
 
 /* ── FIX 1 + 2: exportDashboard ─────────────────────────────────────────
@@ -181,9 +183,14 @@ export default function Dashboard() {
   const T = useCallback((key: TranslationKey) => tDual(key, language), [language]);
 
   const qc = useQueryClient();
-  const { data, isLoading, dataUpdatedAt } = useStats();
-  const { data: trendData } = useRevenueTrend();
-  const { data: lbData }    = useLeaderboard();
+  const gradId = useId().replace(/:/g, "rev");
+  const [isExporting, setIsExporting] = useState(false);
+  const [errorDismissed, setErrorDismissed] = useState(false);
+  const { data, isLoading, isFetching, isError: statsError, dataUpdatedAt } = useStats();
+  const { data: trendData, isError: trendError } = useRevenueTrend();
+  const { data: lbData, isError: lbError }    = useLeaderboard();
+
+  const hasError = (statsError || trendError || lbError) && !errorDismissed;
 
   const handleRefresh = useCallback(async () => {
     await Promise.all([
@@ -198,13 +205,13 @@ export default function Dashboard() {
   const revenueSparkData = trend.length >= 2
     ? trend.slice(-7).map(t => t.revenue ?? 0)
     : Array(7).fill(0);
-  const ridesSparkData = trend.length >= 2
+  const ridesSparkData = trend.length >= 1
     ? trend.slice(-7).map(t => t.rideCount ?? 0)
     : Array(7).fill(0);
-  const ordersSparkData = trend.length >= 2
+  const ordersSparkData = trend.length >= 1
     ? trend.slice(-7).map(t => t.orderCount ?? 0)
     : Array(7).fill(0);
-  const sosSparkData = trend.length >= 2
+  const sosSparkData = trend.length >= 1
     ? trend.slice(-7).map(t => t.sosCount ?? 0)
     : Array(7).fill(0);
 
@@ -259,6 +266,15 @@ export default function Dashboard() {
 
   return (
     <PullToRefresh onRefresh={handleRefresh} className="space-y-6 sm:space-y-8">
+      {hasError && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span className="flex-1">Some data may be unavailable — one or more requests failed. Try refreshing.</span>
+          <button onClick={() => setErrorDismissed(true)} className="shrink-0 hover:opacity-70">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       <PageHeader
         icon={LayoutDashboard}
         title={T("overview")}
@@ -405,7 +421,7 @@ export default function Dashboard() {
           <Card className="col-span-2 sm:col-span-2 lg:col-span-1 rounded-2xl bg-gradient-to-br from-primary to-blue-700 text-white shadow-lg shadow-primary/20 border-none">
             <CardContent className="p-4 sm:p-6">
               <p className="text-white/80 font-medium text-xs sm:text-sm mb-1 sm:mb-2 flex items-center gap-2">
-                <TrendingUp className="w-4 h-4" /> {T("grandTotal")}
+                <TrendingUp className="w-4 h-4" /> {T("revenueBreakdown")}
               </p>
               {/* FIX 5: ?? 0 */}
               <h3 className="text-xl sm:text-2xl font-bold">{formatCurrency(data?.revenue?.total ?? 0)}</h3>
@@ -418,16 +434,18 @@ export default function Dashboard() {
       </div>
 
       {/* 7-Day Revenue Trend chart */}
-      {trend.length > 0 && (
-        <Card className="rounded-2xl border-border/50 shadow-sm p-4 sm:p-6">
-          <h2 className="text-base sm:text-lg font-bold mb-4 flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-indigo-500" /> 7-Day Revenue Trend
-          </h2>
+      <Card className="rounded-2xl border-border/50 shadow-sm p-4 sm:p-6">
+        <h2 className="text-base sm:text-lg font-bold mb-4 flex items-center gap-2">
+          <TrendingUp className="w-4 h-4 text-indigo-500" /> 7-Day Revenue Trend
+        </h2>
+        {trend.length === 0 ? (
+          <div className="h-44 flex items-center justify-center text-muted-foreground text-sm">No trend data available</div>
+        ) : (
           <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={trend} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                 <defs>
-                  <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                  <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%"  stopColor="#6366F1" stopOpacity={0.3} />
                     <stop offset="95%" stopColor="#6366F1" stopOpacity={0} />
                   </linearGradient>
@@ -458,8 +476,8 @@ export default function Dashboard() {
               </AreaChart>
             </ResponsiveContainer>
           </div>
-        </Card>
-      )}
+        )}
+      </Card>
 
       {/* Leaderboards */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6">
@@ -542,7 +560,7 @@ export default function Dashboard() {
                 <div key={order.id} className="px-4 sm:px-6 py-3 sm:py-4 hover:bg-indigo-50/40 transition-colors flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="font-semibold text-sm">#{order.id.slice(-6).toUpperCase()}</span>
+                      <span className="font-semibold text-sm">#{String(order.id).slice(-6).toUpperCase()}</span>
                       <span className="capitalize text-[10px] font-medium text-muted-foreground px-1.5 py-0.5 bg-muted rounded-full">{order.type}</span>
                     </div>
                     <span className="text-xs text-muted-foreground">{formatDate(order.createdAt)}</span>
@@ -575,7 +593,7 @@ export default function Dashboard() {
                 <div key={ride.id} className="px-4 sm:px-6 py-3 sm:py-4 hover:bg-indigo-50/40 transition-colors flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="font-semibold text-sm">#{ride.id.slice(-6).toUpperCase()}</span>
+                      <span className="font-semibold text-sm">#{String(ride.id).slice(-6).toUpperCase()}</span>
                       <span className="capitalize text-[10px] font-medium text-muted-foreground px-1.5 py-0.5 bg-muted rounded-full">{ride.type}</span>
                     </div>
                     <span className="text-xs text-muted-foreground">{formatDate(ride.createdAt)}</span>
