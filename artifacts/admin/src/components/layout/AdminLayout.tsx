@@ -35,10 +35,6 @@ import {
   isActivePath,
   readFavorites,
   writeFavorites,
-} from "@/lib/navConfig";
-
-// NAV_GROUPS, NAV_DESCRIPTIONS, BOTTOM_NAV and navItems are imported from
-// `@/lib/navConfig` so the command palette, breadcrumbs and any future
 // favorites/pinned UI all read from one source of truth.
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -54,32 +50,10 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
     const active = NAV_GROUPS.find(g => g.items.some(i => isActivePath(location, i.href)));
-    return new Set(active ? [active.key] : [NAV_GROUPS[0]!.key]);
-  });
-
-  // In-sidebar text filter — narrows the visible nav items as the admin types.
-  // Independent from the Cmd+K command palette which still does cross-action search.
-  const [navFilter, setNavFilter] = useState("");
-  const navFilterTrim = navFilter.trim().toLowerCase();
-
-  // Pinned favorites — persisted as comma-joined hrefs in localStorage.
-  // Star icon next to each item toggles membership; pinned items render at the
-  // top of the sidebar above the group list for one-click access.
-  const [favorites, setFavorites] = useState<string[]>(() => readFavorites(safeLocalGet));
-  const toggleFavorite = useCallback((href: string) => {
+    return new Set(active ? [active.key] : [NAV_GROUPS[0]!.key]); rim = navFilter.trim().toLowerCase();
+St toggleFavorite = useCallback((href: string) => {
     setFavorites(prev => {
-      const next = prev.includes(href) ? prev.filter(h => h !== href) : [...prev, href];
-      writeFavorites(safeLocalSet, next);
-      return next;
-    });
-  }, []);
-
-  const [sosCount, setSosCount] = useState(0);
-  const [errorCount, setErrorCount] = useState(0);
-  const socketRef = useRef<Socket | null>(null);
-  const langRef = useRef<HTMLDivElement>(null);
-  const userRef = useRef<HTMLDivElement>(null);
-  const mobileDrawerRef = useRef<HTMLDivElement>(null);
+  coo>t mobileDrawerRef = useRef<HTMLDivElement>(null);
 
   const toggleCollapsed = useCallback(() => {
     setCollapsed(c => {
@@ -110,9 +84,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     fetcher("/error-reports/new-count")
       .then((data: { count?: number }) => { if (typeof data.count === "number") setErrorCount(data.count); })
       .catch((err) => { console.error("[AdminLayout] Error count fetch failed:", err); });
-
-    const errorInterval = setInterval(() => {
-      fetcher("/error-reports/new-count")
+ lfer("/error-reports/new-count")
         .then((data: { count?: number }) => { if (typeof data.count === "number") setErrorCount(data.count); })
         .catch((err) => { console.error("[AdminLayout] Error count interval fetch failed:", err); });
     }, getAdminTiming().layoutErrorPollIntervalMs);
@@ -125,9 +97,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
       auth: (cb: (data: Record<string, string>) => void) => cb({ token: state.accessToken || "" }),
       transports: ["websocket", "polling"],
     });
-    socketRef.current = socket;
-    socket.on("connect", () => socket.emit("join", "admin-fleet"));
-    socket.on("sos:new", () => {
+   soeet"con("sos:new", () => {
       setSosCount(c => c + 1);
       if ("vibrate" in navigator) navigator.vibrate([200, 100, 200]);
     });
@@ -157,9 +127,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", handler);
   }, [isMobileMenuOpen]);
 
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (langRef.current && !langRef.current.contains(e.target as Node)) setLangOpen(false);
+  useEffect(() => {contains(e.target as Node)) setLangOpen(false);
       if (userRef.current && !userRef.current.contains(e.target as Node)) setUserMenuOpen(false);
     };
     document.addEventListener("mousedown", handler);
@@ -174,9 +142,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
   /* Focus trap for mobile nav drawer — WCAG 2.1.2 / 2.4.3 */
   useEffect(() => {
-    if (!isMobileMenuOpen || !mobileDrawerRef.current) return;
-    const drawer = mobileDrawerRef.current;
-    const previousFocus = document.activeElement as HTMLElement | null;
+    if (!isMobileMenuOpen |nt as HTMLElement | null;
     const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
     /* Move focus to first focusable item in drawer */
